@@ -1,0 +1,206 @@
+extern crate reqwest;
+extern crate config;
+extern crate bytes;
+
+use rss::Channel;
+use chrono::DateTime;
+use std::fs::File;
+use std::io::prelude::*;
+use config::*;
+use std::path::PathBuf;
+use futures::{stream, StreamExt};
+use tokio;
+
+fn main() {
+    let mut settings = Config::default();
+
+    match settings.merge(config::File::with_name("config.toml")) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Error in config file: {}", e);
+            return ()
+        },
+    };
+    
+    let url = match settings.get::<String>("url") {
+        Ok(link) => link,
+        Err(error) => {
+            println!("Error: {} in config.toml file.", error);
+            return ()
+        },
+    };
+
+    let verbose = match settings.get::<String>("verbose") {
+        Ok(verbose) => match &verbose[..] {
+            "true" => true,
+            "1" => true,
+            "on" => true,
+            _ => false,
+        }
+        Err(_) => true
+    };
+
+    let parallel_downloads = match settings.get::<usize>("parallel_download") {
+        Ok(pd) => pd,
+        Err(error) => {
+            if verbose {
+                println!("Warning: {} in config.toml file. Default parallel requests set to 2.", error);
+            }
+            2
+        },
+    };
+
+    let mut content = match reqwest::blocking::get(url.as_str()) {
+        Ok(rssfeed) => rssfeed,
+        Err(error) => {
+           if verbose { 
+               println!("{}", error);
+           }
+           return ()
+        },
+    };
+
+    let path = match settings.get::<String>("path") {
+        Ok(path) => path,
+        Err(error) => {
+            if verbose {
+                println!("Warning: {} in config.toml file. Current directory will be used.", error);
+            }
+            "./".to_string()
+        },
+    };
+
+    let mut buf: Vec<u8> = vec![];
+    match content.copy_to(&mut buf) {
+        Ok(_) => (),
+        Err(error) => {
+            if verbose {
+                println!("Error: {}", error);
+            }
+            return ()
+        },
+    };
+
+    let channel = match Channel::read_from(&buf[..]) {
+        Ok(data) => data,
+        Err(error) => {
+            if verbose {
+                println!("Error reading rss feed: {}", error);
+            }
+            return ()
+        },
+    };
+
+    let items = channel.items();
+    let sstate = read_savedstate();
+    let sstate = match sstate {
+        Ok(saved) => saved,
+        Err(_) => "0000-01-28T07:55:39-05:00".to_string(),
+    };
+    let date = DateTime::parse_from_rfc3339(&sstate);
+    let date = match date {
+        Ok(date) => date,
+        Err(_) => DateTime::parse_from_rfc3339("0000-01-28T07:55:39-05:00").unwrap(),
+    };
+    let mut mindate = date;
+    let mut urls: Vec<String> = vec![];
+    
+    for item in items {        
+        let time = DateTime::parse_from_rfc2822(item.pub_date().unwrap()).unwrap();
+        if time > date {
+            let item_link = match item.link(){
+                Some(i) => i,
+                None => {
+                    if verbose {
+                        println!("No link.");
+                    }
+                    continue
+                }, 
+            };
+            urls.push(item_link.to_string());
+
+            if time > mindate {
+                mindate = time;
+            }
+        }
+    }
+
+    dl_p(&urls, &path, verbose, parallel_downloads);
+
+    let _wr = write_savedstate(mindate.to_rfc3339().to_string());
+}
+
+struct Tfile {
+    name: std::path::PathBuf,
+    content_type: String,
+    content: std::result::Result<bytes::Bytes, reqwest::Error>,
+}
+
+#[tokio::main]
+async fn dl_p(urls: &[String], path: &String, verbose: bool, parallel_downloads: usize) {
+    let client = reqwest::Client::new();
+
+    let file_content = stream::iter(urls)
+        .map(|url| {
+            let client = &client;
+            async move {
+                let resp = client.get(url).send().await;
+                let resp = resp.unwrap();
+                let header = resp.headers().get("content-type").unwrap().to_str().unwrap().to_string();
+                let filename = match resp.headers().get("content-disposition") {
+                    Some(i) => {
+                        let tmp = i.to_str().unwrap();
+                        &tmp[22..tmp.len()-1]
+                    },
+                    None => {
+                        resp.url()
+                            .path_segments()
+                            .and_then(|segments| segments.last())
+                            .and_then(|name| if name.is_empty() { None } else { Some(name) })
+                            .unwrap_or("tmp.torrent")
+                    }
+                };
+                let mut p = PathBuf::from(path);
+                p.push(filename);
+                let content = resp.bytes().await;
+                Tfile {name: p, content_type: header, content: content  }
+            }
+        })
+        .buffer_unordered(parallel_downloads);
+
+    file_content
+        .for_each(|b| {
+            async {
+                match &b.content_type[..] {
+                    "application/x-bittorrent" => {
+                        match b.content {
+                            Ok(c) => {
+                                let mut dest = File::create(b.name).unwrap();
+                                match dest.write_all(&c) {
+                                    Ok(_) => (),
+                                    Err(e) => if verbose { eprintln!("Got an error: {}", e) },
+                                }
+                            },
+                            Err(e) => if verbose { eprintln!("Got an error: {}", e) },
+                        }
+                    }
+                    _ => if verbose { eprintln!("Rss url does not link to a torrent file.") }
+                }
+            }
+        })
+        .await;
+}
+
+fn write_savedstate(pub_date: String) -> std::io::Result<()> {
+    let mut file = File::create("savedstate.dat")?;
+    file.write_all(pub_date.as_bytes())?;
+    Ok(())
+}
+
+fn read_savedstate() -> std::io::Result<String> {
+    let mut file = File::open("savedstate.dat")?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    contents = contents.trim().to_string();
+    Ok(contents)
+}
