@@ -1,0 +1,11 @@
+#url of rss feed
+url = ""
+
+#download path
+path = ""
+
+#show or surpress error messages
+verbose = "false"
+
+#number of simultaneous downloads
+parallel_download = 4
