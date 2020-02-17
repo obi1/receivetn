@@ -1,14 +1,11 @@
-extern crate reqwest;
-extern crate config;
-extern crate bytes;
-
-use rss::Channel;
 use chrono::DateTime;
+use config::*;
+use futures::{stream, StreamExt};
+use regex::Regex;
+use rss::Channel;
 use std::fs::File;
 use std::io::prelude::*;
-use config::*;
 use std::path::PathBuf;
-use futures::{stream, StreamExt};
 use tokio;
 
 fn main() {
@@ -53,10 +50,10 @@ fn main() {
     let mut content = match reqwest::blocking::get(url.as_str()) {
         Ok(rssfeed) => rssfeed,
         Err(error) => {
-           if verbose { 
-               println!("{}", error);
-           }
-           return ()
+            if verbose { 
+                println!("{}", error);
+            }
+            return ()
         },
     };
 
@@ -68,6 +65,26 @@ fn main() {
             }
             "./".to_string()
         },
+    };
+
+    let regex_true = match settings.get::<String>("match") {
+        Ok(m) => m,
+        Err(error) => {
+            if verbose {
+                println!("{}", error);
+            }
+            String::from("")
+        }
+    };
+
+    let regex_false = match settings.get::<String>("match_false") {
+        Ok(m) => m,
+        Err(error) => {
+            if verbose {
+                println!("{}", error);
+            }
+            String::from("")
+        }
     };
 
     let mut buf: Vec<u8> = vec![];
@@ -104,6 +121,20 @@ fn main() {
     };
     let mut mindate = date;
     let mut urls: Vec<String> = vec![];
+    let mut regex_true_string = String::from(r"(?i)^");
+    let mut regex_false_string = String::from(r"(?i)^");
+    if regex_true.len() > 0 {
+        regex_true_string.push_str(&regex_true);
+    }
+    else {
+        regex_true_string.push_str(&".*");
+    }
+    regex_false_string.push_str(&regex_false);
+    regex_true_string.push_str("$");
+    regex_false_string.push_str("$");
+
+    let regex_true = Regex::new(&regex_true_string).unwrap();
+    let regex_false = Regex::new(&regex_false_string).unwrap();
     
     for item in items {        
         let time = DateTime::parse_from_rfc2822(item.pub_date().unwrap()).unwrap();
@@ -117,7 +148,18 @@ fn main() {
                     continue
                 }, 
             };
-            urls.push(item_link.to_string());
+
+            let item_title = match item.title() {
+                Some(i) => i,
+                None => "",
+            };
+
+            let is_match = regex_true.is_match(item_title);
+            let not_match = !regex_false.is_match(item_title);
+
+            if is_match && not_match {
+                urls.push(item_link.to_string());
+            }
 
             if time > mindate {
                 mindate = time;

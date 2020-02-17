@@ -9,3 +9,9 @@ verbose = "false"
 
 #number of simultaneous downloads
 parallel_download = 4
+
+#regex patern to include
+match = ""
+
+#regex patern to exclude
+match_false = ""
