@@ -1,6 +1,6 @@
 [package]
 name = "receivetn"
-version = "0.2.1"
+version = "0.3"
 authors = ["Tadej Obrstar <tadej.obrstar@gmail.com>"]
 edition = "2018"
 
