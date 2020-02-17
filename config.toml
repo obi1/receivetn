@@ -4,6 +4,12 @@ url = ""
 #download path
 path = ""
 
+#if false run check once and exit, if true keep checking RSS feed indefinitely
+run_forever = "false"
+
+#interval to check RSS feed in minutes
+check_timer = 15
+
 #show or surpress error messages
 verbose = "false"
 

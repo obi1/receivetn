@@ -6,6 +6,7 @@ use rss::Channel;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::PathBuf;
+use std::{thread, time};
 use tokio;
 
 fn main() {
@@ -46,17 +47,7 @@ fn main() {
             2
         },
     };
-
-    let mut content = match reqwest::blocking::get(url.as_str()) {
-        Ok(rssfeed) => rssfeed,
-        Err(error) => {
-            if verbose { 
-                println!("{}", error);
-            }
-            return ()
-        },
-    };
-
+    
     let path = match settings.get::<String>("path") {
         Ok(path) => path,
         Err(error) => {
@@ -65,6 +56,24 @@ fn main() {
             }
             "./".to_string()
         },
+    };
+
+    let quit = match settings.get::<String>("run_forever") {
+        Ok(run_forever) => match &run_forever[..] {
+            "true" => false,
+            "1" => false,
+            "on" => false,
+            _ => true,
+        },
+        Err(_) => true
+    };
+
+    let sleep = match settings.get::<u64>("check_timer") {
+        Ok(ct) => time::Duration::from_secs(ct * 60),
+        Err(error) => {
+            println!("Warning: {} in config.toml file. Default delay between checking RSS feed set to 15 minuts.", error);
+            time::Duration::from_secs(900)
+        }
     };
 
     let regex_true = match settings.get::<String>("match") {
@@ -87,40 +96,6 @@ fn main() {
         }
     };
 
-    let mut buf: Vec<u8> = vec![];
-    match content.copy_to(&mut buf) {
-        Ok(_) => (),
-        Err(error) => {
-            if verbose {
-                println!("Error: {}", error);
-            }
-            return ()
-        },
-    };
-
-    let channel = match Channel::read_from(&buf[..]) {
-        Ok(data) => data,
-        Err(error) => {
-            if verbose {
-                println!("Error reading rss feed: {}", error);
-            }
-            return ()
-        },
-    };
-
-    let items = channel.items();
-    let sstate = read_savedstate();
-    let sstate = match sstate {
-        Ok(saved) => saved,
-        Err(_) => "0000-01-28T07:55:39-05:00".to_string(),
-    };
-    let date = DateTime::parse_from_rfc3339(&sstate);
-    let date = match date {
-        Ok(date) => date,
-        Err(_) => DateTime::parse_from_rfc3339("0000-01-28T07:55:39-05:00").unwrap(),
-    };
-    let mut mindate = date;
-    let mut urls: Vec<String> = vec![];
     let mut regex_true_string = String::from(r"(?i)^");
     let mut regex_false_string = String::from(r"(?i)^");
     if regex_true.len() > 0 {
@@ -135,41 +110,109 @@ fn main() {
 
     let regex_true = Regex::new(&regex_true_string).unwrap();
     let regex_false = Regex::new(&regex_false_string).unwrap();
-    
-    for item in items {        
-        let time = DateTime::parse_from_rfc2822(item.pub_date().unwrap()).unwrap();
-        if time > date {
-            let item_link = match item.link(){
-                Some(i) => i,
-                None => {
-                    if verbose {
-                        println!("No link.");
-                    }
+
+    loop {
+        let mut content = match reqwest::blocking::get(url.as_str()) {
+            Ok(rssfeed) => rssfeed,
+            Err(error) => {
+                if verbose { 
+                    println!("{}", error);
+                }
+                if quit {
+                    return ()
+                }
+                else {
                     continue
-                }, 
-            };
+                }
+            },
+        };
 
-            let item_title = match item.title() {
-                Some(i) => i,
-                None => "",
-            };
+        let mut buf: Vec<u8> = vec![];
+        match content.copy_to(&mut buf) {
+            Ok(_) => (),
+            Err(error) => {
+                if verbose {
+                    println!("Error: {}", error);
+                }
+                if quit {
+                    return ()
+                }
+                else {
+                    continue
+                }
+            },
+        };
 
-            let is_match = regex_true.is_match(item_title);
-            let not_match = !regex_false.is_match(item_title);
+        let channel = match Channel::read_from(&buf[..]) {
+            Ok(data) => data,
+            Err(error) => {
+                if verbose {
+                    println!("Error reading rss feed: {}", error);
+                }
+                if quit {
+                    return ()
+                }
+                else {
+                    continue
+                }
+            },
+        };
 
-            if is_match && not_match {
-                urls.push(item_link.to_string());
-            }
+        let items = channel.items();
+        let sstate = read_savedstate();
+        let sstate = match sstate {
+            Ok(saved) => saved,
+            Err(_) => "0000-01-28T07:55:39-05:00".to_string(),
+        };
+        let date = DateTime::parse_from_rfc3339(&sstate);
+        let date = match date {
+            Ok(date) => date,
+            Err(_) => DateTime::parse_from_rfc3339("0000-01-28T07:55:39-05:00").unwrap(),
+        };
+        let mut mindate = date;
+        let mut urls: Vec<String> = vec![];
+        
+        for item in items {        
+            let time = DateTime::parse_from_rfc2822(item.pub_date().unwrap()).unwrap();
+            if time > date {
+                let item_link = match item.link(){
+                    Some(i) => i,
+                    None => {
+                        if verbose {
+                            println!("No link.");
+                        }
+                        continue
+                    }, 
+                };
 
-            if time > mindate {
-                mindate = time;
+                let item_title = match item.title() {
+                    Some(i) => i,
+                    None => "",
+                };
+
+                let is_match = regex_true.is_match(item_title);
+                let not_match = !regex_false.is_match(item_title);
+
+                if is_match && not_match {
+                    urls.push(item_link.to_string());
+                }
+
+                if time > mindate {
+                    mindate = time;
+                }
             }
         }
+
+        dl_p(&urls, &path, verbose, parallel_downloads);
+
+        let _wr = write_savedstate(mindate.to_rfc3339().to_string());
+
+        if quit {
+            break ();
+        }
+
+        thread::sleep(sleep);
     }
-
-    dl_p(&urls, &path, verbose, parallel_downloads);
-
-    let _wr = write_savedstate(mindate.to_rfc3339().to_string());
 }
 
 struct Tfile {
