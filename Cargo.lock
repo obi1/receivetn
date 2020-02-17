@@ -873,6 +873,7 @@ dependencies = [
  "chrono",
  "config",
  "futures",
+ "regex",
  "reqwest",
  "rss",
  "tokio",
