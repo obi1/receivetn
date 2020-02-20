@@ -1,6 +1,5 @@
 #url of rss feed
 url = ""
-
 #download path
 path = ""
 
@@ -11,7 +10,7 @@ run_forever = "false"
 check_timer = 15
 
 #show or surpress error messages
-verbose = "false"
+verbose = "true"
 
 #number of simultaneous downloads
 parallel_download = 4
