@@ -1,16 +1,18 @@
-#url of rss feed
-url = ""
-#download path
-path = ""
+[global]
+#active rss profiles
+enable = ["example1", "example2"]
 
-#if false run check once and exit, if true keep checking RSS feed indefinitely
+#download path
+path = "/home/example/rss"
+
+#show or surpress error messages
+verbose = "false"
+
+#if false run once and exit, if true keep checking RSS feed indefinitely
 run_forever = "false"
 
 #interval to check RSS feed in minutes
 check_timer = 15
-
-#show or surpress error messages
-verbose = "true"
 
 #number of simultaneous downloads
 parallel_download = 4
@@ -20,3 +22,18 @@ match = ""
 
 #regex patern to exclude
 match_false = ""
+
+#profile name (must be unique and included in global enable to run), every option from global can be overriden, but only url is required
+[example1]
+#url of rss feed
+url = "https://example1.com"
+path = "/home/example/rss1"
+
+[example2]
+url = "https://example2.org"
+verbose = "true"
+run_forever = "true"
+
+[inactive_example]
+url = "https://dontget.com"
+path = "/home/example/emptydirectory"
