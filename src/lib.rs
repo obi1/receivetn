@@ -1,9 +1,26 @@
+// This file is part of receivetn.
+// Copyright (C) 2020  Tadej Obrstar
+//
+// receivetn is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// receivetn is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Foobar.  If not, see <https://www.gnu.org/licenses/>.
+
 use chrono::DateTime;
 use config::*;
 use futures::{stream, StreamExt};
 use regex::Regex;
 use rss::Channel;
 use std::error::Error;
+use std::fs::OpenOptions;
 use std::fs::File;
 use std::fs;
 use std::io::ErrorKind;
@@ -13,9 +30,14 @@ use std::time;
 use tokio;
 
 struct Tfile {
-    name: std::path::PathBuf,
-    content_type: String,
+    filename: Filename,
     content: std::result::Result<bytes::Bytes, reqwest::Error>,
+}
+
+struct Filename {
+    name: String,
+    ext: Option<String>,
+    path: String,
 }
 
 pub struct  Rresult {
@@ -24,6 +46,7 @@ pub struct  Rresult {
 }
 
 pub struct Conf {
+    pub name: String,
     pub url: String,
     pub path: String,
     pub verbose: bool,
@@ -35,14 +58,16 @@ pub struct Conf {
 }
 
 impl Conf {
-    pub fn new(filename: &str) -> Result<Conf, ConfigError> {
+    pub fn from_file(filename: &str) -> Result<Vec<Conf>, ConfigError> {
+        let mut configs: Vec<Conf> = vec![];
+
         let mut settings = Config::default();
 
         settings.merge(config::File::with_name(filename))?;
-        
-        let url = settings.get::<String>("url")?; 
 
-        let verbose = match settings.get::<String>("verbose") {
+        let active = settings.get::<Vec<String>>("global.enable")?;
+
+        let verbose = match settings.get::<String>("global.verbose") {
             Ok(verbose) => match &verbose[..] {
                 "true" => true,
                 "1" => true,
@@ -52,21 +77,21 @@ impl Conf {
             Err(_) => true
         };
 
-        let parallel_downloads = settings.get::<usize>("parallel_download").unwrap_or_else(|error| {
+        let parallel_downloads = settings.get::<usize>("global.parallel_download").unwrap_or_else(|error| {
             if verbose {
                 println!("Warning: {} in config.toml file. Default parallel requests set to 2.", error);
             }
             2
         });
         
-        let path = settings.get::<String>("path").unwrap_or_else(|error| {
+        let path = settings.get::<String>("global.path").unwrap_or_else(|error| {
             if verbose {
                 println!("Warning: {} in config.toml file. Current directory will be used.", error);
             }
             String::from("./")
         });
 
-        let quit = match settings.get::<String>("run_forever") {
+        let quit = match settings.get::<String>("global.run_forever") {
             Ok(run_forever) => match &run_forever[..] {
                 "true" => false,
                 "1" => false,
@@ -76,7 +101,7 @@ impl Conf {
             Err(_) => true
         };
 
-        let sleep = match settings.get::<u64>("check_timer") {
+        let sleep = match settings.get::<u64>("global.check_timer") {
             Ok(ct) => time::Duration::from_secs(ct * 60),
             Err(error) => {
                 if verbose {
@@ -86,36 +111,94 @@ impl Conf {
             }
         };
 
-        let regex_true = settings.get::<String>("match").unwrap_or_else(|error| {
+        let regex_true = settings.get::<String>("global.match").unwrap_or_else(|error| {
             if verbose {
                 println!("{}", error);
             }
             String::from("")
         });
 
-        let regex_false = settings.get::<String>("match_false").unwrap_or_else(|error| {
+        let regex_false = settings.get::<String>("global.match_false").unwrap_or_else(|error| {
             if verbose {
                 println!("{}", error);
             }
             String::from("")
         });
 
-        let mut regex_true_string = String::from(r"(?i)^");
-        let mut regex_false_string = String::from(r"(?i)^");
-        if regex_true.len() > 0 {
-            regex_true_string.push_str(&regex_true);
-        }
-        else {
-            regex_true_string.push_str(&".*");
-        }
-        regex_false_string.push_str(&regex_false);
-        regex_true_string.push_str("$");
-        regex_false_string.push_str("$");
+        for profile in &active {
+            let mut url = profile.clone();
+            url.push_str(".url");
+            let url = match settings.get::<String>(&url[..]) {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
 
-        let regex_true = Regex::new(&regex_true_string).unwrap();
-        let regex_false = Regex::new(&regex_false_string).unwrap();
+            let mut verbose_new = profile.clone();
+            verbose_new.push_str(".verbose");
+            let verbose_new = match settings.get::<String>(&verbose_new[..]) {
+                Ok(x) => match &x[..] {
+                    "true" => true,
+                    "1" => true,
+                    "on" => true,
+                    _ => false,
+                },
+                Err(_) => verbose,
+            };
+            
+            let mut parallel_downloads_new = profile.clone();
+            parallel_downloads_new.push_str(".parallel_download");
+            let parallel_downloads_new = settings.get::<usize>(&parallel_downloads_new[..]).unwrap_or(parallel_downloads);
+            
+            let mut path_new = profile.clone();
+            path_new.push_str(".path");
+            let path_new = settings.get::<String>(&path_new[..]).unwrap_or(path.clone());
+    
+            let mut quit_new = profile.clone();
+            quit_new.push_str(".run_forever");
+            let quit_new = match settings.get::<String>(&quit_new[..]) {
+                Ok(x) => match &x[..] {
+                    "true" => false,
+                    "1" => false,
+                    "on" => false,
+                    _ => true,
+                },
+                Err(_) => quit
+            };
+    
+            let mut sleep_new = profile.clone();
+            sleep_new.push_str(".check_timer");
+            let sleep_new = match settings.get::<u64>(&sleep_new[..]) {
+                Ok(ct) => time::Duration::from_secs(ct * 60),
+                Err(_) => sleep
+            };
+    
+            let mut regex_true_new = profile.clone();
+            regex_true_new.push_str(".match");
+            let regex_true_new = settings.get::<String>(&regex_true_new[..]).unwrap_or(regex_true.clone());
+    
+            let mut regex_false_new = profile.clone();
+            regex_false_new.push_str(".match_false");
+            let regex_false_new = settings.get::<String>(&regex_false_new[..]).unwrap_or(regex_false.clone());
 
-        Ok(Conf { url, path, verbose, parallel_downloads, quit, sleep, regex_true, regex_false})
+            let mut regex_true_string = String::from(r"(?i)^");
+            let mut regex_false_string = String::from(r"(?i)^");
+            if regex_true_new.len() > 0 {
+                regex_true_string.push_str(&regex_true_new);
+            }
+            else {
+                regex_true_string.push_str(&".*");
+            }
+            regex_false_string.push_str(&regex_false_new);
+            regex_true_string.push_str("$");
+            regex_false_string.push_str("$");
+    
+            let regex_true_new = Regex::new(&regex_true_string).unwrap();
+            let regex_false_new = Regex::new(&regex_false_string).unwrap();
+
+            configs.push(Conf { name: profile.clone(), url: url, path: path_new, verbose: verbose_new, parallel_downloads: parallel_downloads_new, quit: quit_new, sleep: sleep_new, regex_true: regex_true_new, regex_false: regex_false_new})
+        }
+
+        Ok(configs)
     }
 }
 
@@ -129,7 +212,7 @@ pub async fn download_files(urls: &[String], config: &Conf) {
             async move {
                 let resp = client.get(url).send().await;
                 let resp = resp.unwrap();
-                let header = resp.headers().get("content-type").unwrap().to_str().unwrap().to_string();
+                //let header = resp.headers().get("content-type").unwrap().to_str().unwrap().to_string();
                 let filename = match resp.headers().get("content-disposition") {
                     Some(i) => {
                         let tmp = i.to_str().unwrap();
@@ -140,13 +223,26 @@ pub async fn download_files(urls: &[String], config: &Conf) {
                             .path_segments()
                             .and_then(|segments| segments.last())
                             .and_then(|name| if name.is_empty() { None } else { Some(name) })
-                            .unwrap_or("tmp.torrent")
+                            .unwrap_or("unknown")
                     }
                 };
-                let mut p = PathBuf::from(&config.path);
-                p.push(filename);
+                let path = config.path.to_string();
+                let split = filename.rfind(".");
+                let name = match split {
+                    Some(x) => {
+                        filename[..x].to_string()
+                    }
+                    None => filename.to_string()
+                };
+                let ext = match split {
+                    Some(x) => {
+                        Some(filename[x..].to_string())
+                    }
+                    None => None
+                };
                 let content = resp.bytes().await;
-                Tfile {name: p, content_type: header, content: content  }
+
+                Tfile {filename: Filename { name, ext, path}, content: content  }
             }
         })
         .buffer_unordered(config.parallel_downloads);
@@ -154,38 +250,70 @@ pub async fn download_files(urls: &[String], config: &Conf) {
     file_content
         .for_each(|b| {
             async {
-                match &b.content_type[..] {
-                    "application/x-bittorrent" => {
-                        match b.content {
-                            Ok(c) => {
-                                let mut dest = File::create(b.name).unwrap();
-                                match dest.write_all(&c) {
-                                    Ok(_) => (),
-                                    Err(e) => if config.verbose { eprintln!("Got an error: {}", e) },
-                                }
-                            },
+                match b.content {
+                    Ok(c) => {
+                        let mut dest = find_valid_filename(&b.filename, 0).unwrap();
+                        match dest.write_all(&c) {
+                            Ok(_) => (),
                             Err(e) => if config.verbose { eprintln!("Got an error: {}", e) },
                         }
-                    }
-                    _ => if config.verbose { eprintln!("Rss url does not link to a torrent file.") }
+                    },
+                    Err(e) => if config.verbose { eprintln!("Got an error: {}", e) },
                 }
             }
         })
         .await;
 }
 
-pub fn write_savedstate(pub_date: String) -> Result<(), std::io::Error> {
-    let mut file = File::create("savedstate.dat")?;
+fn find_valid_filename(filename: &Filename, failed_count: u32) -> Result<File, std::io::Error> {
+    let mut path = PathBuf::from(&filename.path);
+    let mut file = filename.name.clone();
+    
+    if failed_count > 0 {
+        file.push_str(" (");
+        file.push_str(&failed_count.to_string());
+        file.push(')');
+    }
+
+    match &filename.ext {
+        Some(x) => file.push_str(&x),
+        None => {},
+    }
+
+    path.push(&file);
+
+    match OpenOptions::new().create_new(true).write(true).open(path) {
+        Ok(x) => Ok(x),
+        Err(error) => match error.kind() {
+            ErrorKind::AlreadyExists => {
+                let failed_count = failed_count + 1;
+                find_valid_filename(&filename, failed_count)
+            },
+            _ => Err(error),
+        }
+    }
+}
+
+pub fn write_savedstate(name: &str, pub_date: &str) -> Result<(), std::io::Error> {
+    let mut file_name = String::from("state_");
+    file_name.push_str(name);
+    file_name.push_str(".dat");
+    let mut file = File::create(file_name)?;
     file.write_all(pub_date.as_bytes())?;
     Ok(())
 }
 
-pub fn read_savedstate() -> DateTime<chrono::offset::FixedOffset> {
-    let content = match fs::read_to_string("savedstate.dat") {
+pub fn read_savedstate(name: &str, verbose: &bool) -> DateTime<chrono::offset::FixedOffset> {
+    let mut file_name = String::from("state_");
+    file_name.push_str(name);
+    file_name.push_str(".dat");
+    let content = match fs::read_to_string(&file_name) {
         Ok(s) => s.trim().to_string(),
         Err(error) => match error.kind() {
             ErrorKind::PermissionDenied => {
-                println!("Warning: {}. Can't read from savedstate.dat.", error);
+                if *verbose {
+                    println!("Warning: {}. Can't read from file {}.", error, &file_name);
+                }
                 "0000-01-28T07:55:39-05:00".to_string()
             },
             _ => "0000-01-28T07:55:39-05:00".to_string(),
