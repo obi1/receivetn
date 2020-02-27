@@ -1,6 +1,6 @@
 [package]
 name = "receivetn"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Tadej Obrstar <tadej.obrstar@gmail.com>"]
 edition = "2018"
 
@@ -12,8 +12,8 @@ chrono = "0.4.10"
 config = "0.10.1"
 futures = "0.3.4"
 regex = "1.3.4"
-reqwest = { version = "0.10.2", features = ["blocking"] }
-rss = { version = "1.9.0" }
+reqwest = "0.10.2"
+rss = "1.9.0"
 tokio = { version = "0.2.11", features = ["macros"] }
 
 [profile.release]
