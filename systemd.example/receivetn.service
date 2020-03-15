@@ -1,0 +1,14 @@
+[Unit]
+Description=rss feed autoloader
+After=network-online.target
+After=multi-user.target
+Wants=network-online.target
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+KillMode=none
+ExecStart=/home/user/.receivetn/receivetn
+WorkingDirectory=/home/user/.receivetn
+User=user
+Group=user

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check rss feed every 5 minutes
+RefuseManualStart=no
+RefuseManualStop=no
+
+[Timer]
+Persistent=false
+OnCalendar=*:0/5
+
+[Install]
+WantedBy=timers.target

@@ -329,10 +329,8 @@ pub fn read_savedstate(name: &str, verbose: &bool) -> DateTime<chrono::offset::F
 
 #[tokio::main]
 pub async fn get_new_urls(config: &Conf, date: &DateTime<chrono::offset::FixedOffset>) -> Result<Rresult, Box<dyn Error>> {
-    let response = reqwest::get(&config.url).await?;
-    let content = response.bytes().await?;
-    let buf: Vec<u8> = content.to_vec();
-    let channel = Channel::read_from(&buf[..])?;
+    let content: Vec<u8> = reqwest::get(&config.url).await?.bytes().await?.to_vec();
+    let channel = Channel::read_from(&content[..])?;
     let items = channel.items();
 
     let mut mindate = *date;
