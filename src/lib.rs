@@ -28,6 +28,16 @@ use std::io::prelude::*;
 use std::path::PathBuf;
 use std::time;
 use tokio;
+use structopt::StructOpt;
+
+#[derive(StructOpt)]
+pub struct Opt {
+    #[structopt(short = "v", long = "verbose", help = "Run in verbose mode")]
+    pub verbose: bool,
+
+    #[structopt(parse(from_os_str), short = "c", long = "config", default_value = "config.toml")]
+    pub config_file: PathBuf,
+}
 
 struct Tfile {
     filename: Filename,
@@ -57,36 +67,47 @@ pub struct Conf {
     pub regex_false: regex::Regex,
 }
 
+impl Opt {
+    pub fn get() -> Opt {
+        Opt::from_args()
+    }
+}
+
 impl Conf {
-    pub fn from_file(filename: &str) -> Result<Vec<Conf>, ConfigError> {
+    pub fn from_file(opt: &Opt) -> Result<Vec<Conf>, ConfigError> {
         let mut configs: Vec<Conf> = vec![];
 
         let mut settings = Config::default();
 
-        settings.merge(config::File::with_name(filename))?;
+        settings.merge(config::File::with_name(&opt.config_file.to_str().unwrap()))?;
 
         let active = settings.get::<Vec<String>>("global.enable")?;
 
-        let verbose = match settings.get::<String>("global.verbose") {
-            Ok(verbose) => match &verbose[..] {
-                "true" => true,
-                "1" => true,
-                "on" => true,
-                _ => false,
+        let verbose = if opt.verbose == true {
+            opt.verbose
+        }
+        else {
+            match settings.get::<String>("global.verbose") {
+                Ok(verbose) => match &verbose[..] {
+                    "true" => true,
+                    "1" => true,
+                    "on" => true,
+                    _ => false,
+                }
+                Err(_) => true
             }
-            Err(_) => true
         };
 
         let parallel_downloads = settings.get::<usize>("global.parallel_download").unwrap_or_else(|error| {
             if verbose {
-                println!("Warning: {} in config.toml file. Default parallel requests set to 2.", error);
+                println!("Warning: {} in {:?} file. Default parallel requests set to 2.", error, opt.config_file);
             }
             2
         });
         
         let path = settings.get::<String>("global.path").unwrap_or_else(|error| {
             if verbose {
-                println!("Warning: {} in config.toml file. Current directory will be used.", error);
+                println!("Warning: {} in {:?} file. Current directory will be used.", error, opt.config_file);
             }
             String::from("./")
         });
@@ -105,7 +126,7 @@ impl Conf {
             Ok(ct) => time::Duration::from_secs(ct * 60),
             Err(error) => {
                 if verbose {
-                    println!("Warning: {} in config.toml file. Default delay between checking RSS feed set to 15 minuts.", error);
+                    println!("Warning: {} in {:?} file. Default delay between checking RSS feed set to 15 minuts.", error, opt.config_file);
                 }
                 time::Duration::from_secs(900)
             }
@@ -133,16 +154,21 @@ impl Conf {
                 Err(_) => continue,
             };
 
-            let mut verbose_new = profile.clone();
-            verbose_new.push_str(".verbose");
-            let verbose_new = match settings.get::<String>(&verbose_new[..]) {
-                Ok(x) => match &x[..] {
-                    "true" => true,
-                    "1" => true,
-                    "on" => true,
-                    _ => false,
-                },
-                Err(_) => verbose,
+            let verbose_new = if opt.verbose == true {
+                opt.verbose
+            }
+            else {
+                let mut verbose_new = profile.clone();
+                verbose_new.push_str(".verbose");
+                match settings.get::<String>(&verbose_new[..]) {
+                    Ok(x) => match &x[..] {
+                        "true" => true,
+                        "1" => true,
+                        "on" => true,
+                        _ => false,
+                    },
+                    Err(_) => verbose,
+                }
             };
             
             let mut parallel_downloads_new = profile.clone();
